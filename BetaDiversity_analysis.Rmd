@@ -1,0 +1,343 @@
+---
+title: "16s Gala 2021 betadiversity"
+author: "Rose"
+date: "7/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, collapse = TRUE)
+knitr::opts_knit$set(root.dir = "~/Documents/Sundin_Lab/Rot_microbiome/")
+```
+
+
+# Load packages
+```{r, warning=FALSE}
+library(vegan)
+library(tidyverse)
+library(readxl)
+library(agricolae)
+library(phyloseq)
+library(venn)
+library(VennDiagram)
+library(cowplot)
+theme_set(theme_cowplot())
+set.seed(7)
+source("~/Documents/GitHub/DenefLab-MicrobeMiseq/R/miseqR.R")
+```
+
+# Phyloseq Object
+Import object created in AlphaDiversity_analysis.Rmd 
+```{r}
+psq <- readRDS(file = "psq_object.RDS")
+
+psq
+# Summary statistics on read counts 
+min(sample_sums(psq)) #23
+mean(sample_sums(psq)) #15662
+max(sample_sums(psq))  #28913
+```
+
+
+# Gala Time
+### Subset and format
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- psq %>% 
+  subset_taxa(Phylum != "Cyanobacteria/Chloroplast") %>%
+  subset_samples(Cultivar == "Gala") %>%
+  subset_samples(Treatment == "Untreated") %>%
+  prune_taxa(taxa_sums(.) > 10, .) %>%
+  prune_samples(sample_sums(.) > 500, .)
+physq_sub #48 samples, 73 taxa
+# Summary statistics on read counts 
+min(sample_sums(physq_sub)) #504
+mean(sample_sums(physq_sub)) #1124
+max(sample_sums(physq_sub))  #5478
+
+# get read counts 
+sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+physq_scale <- physq_sub %>%
+  scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+min(sample_sums(physq_scale)) #499
+mean(sample_sums(physq_scale)) #504
+max(sample_sums(physq_scale))  #509
+```
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=3, maxit=100, try=100,
+                     distance = "bray") #stress= 0.1340016 
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physeq = physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            shape = "Tissue",
+                            color = "Timepoint") +
+  geom_point(size = 3) +
+  # change colors and shapes
+  scale_color_manual(name = "Timepoint",
+                     breaks = c("Day 0", "Day 14", "Day 28", 
+                                "Day 42", "Rotten"), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Tissue",
+                     breaks = c("Pulp", "Skin"),
+                     values = c(16, 17)) +  
+  ggtitle("Gala")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoint*Tissue, data=sampledf)
+adonb #p= 0.001 (time); 0.001 (tissue); 0.067 (both)
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoint)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Tissue)
+permutest(beta) #NS
+### ANOSIM
+Tmpt <- get_variable(physq_scale, "Timepoint")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.7921889
+Tiss <- get_variable(physq_scale, "Tissue")
+tis_ano <- anosim(dat_bray, Tiss)
+tis_ano$signif #p=0.001
+tis_ano$statistic #R=0.2876484
+```
+
+# Jonathan Time
+### Subset and format
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- psq %>% 
+  subset_taxa(Phylum != "Cyanobacteria/Chloroplast") %>%
+  subset_samples(Treatment == "Untreated") %>%
+  subset_samples(Cultivar == "Jonathan") 
+  #prune_taxa(taxa_sums(.) > 10, .) %>%
+  #prune_samples(sample_sums(.) > 1000, .)
+physq_sub #129 samples, 70 taxa
+
+# Summary statistics on read counts 
+min(sample_sums(physq_sub)) #12242
+mean(sample_sums(physq_sub)) #18652
+max(sample_sums(physq_sub))  #28913
+
+# get read counts 
+sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "gray", binwidth = 20) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+physq_scale <- physq_sub %>%
+  scale_reads(n = 100, round = "round") 
+
+# Summary statistics on read counts 
+min(sample_sums(physq_scale)) #95
+mean(sample_sums(physq_scale)) #99
+max(sample_sums(physq_scale))  #106
+```
+### Ordinate
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=3, maxit=500, try=500,
+                     distance = "bray") #stress=0.1786616
+physq_bc
+```
+
+### Plot
+```{r}
+ordplotJ <- plot_ordination(physeq = physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            shape = "Tissue",
+                            color = "Timepoint") +
+  geom_point(size = 3) + 
+  # change colors and shapes
+  scale_color_manual(name = "Timepoint",
+                     breaks = c("Day 0", "Day 14", "Day 28", 
+                                "Day 42", "Rotten"), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Tissue",
+                     breaks = c("Pulp", "Skin"),
+                     values = c(16, 17)) +  
+  ggtitle("Jonathan")
+ordplotJ
+```
+
+### Tests
+```{r}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoint*Tissue, data=sampledf)
+adonb #p= 0.001 (time); 0.001 (tissue); 0.001 (both)
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoint)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Tissue)
+permutest(beta) #0.019
+### ANOSIM
+Tmpt <- get_variable(physq_scale, "Timepoint")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.5396046
+Tiss <- get_variable(physq_scale, "Tissue")
+tis_ano <- anosim(dat_bray, Tiss)
+tis_ano$signif #p=0.001
+tis_ano$statistic #R=0.2032896
+```
+
+# Chitosan
+### Subset and format
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- psq %>% 
+  subset_taxa(Phylum != "Cyanobacteria/Chloroplast") %>%
+  subset_samples(Sample_labels != "S2T3_1ch") %>%
+  subset_samples(Cultivar == "Jonathan") %>%
+  subset_samples(Treatment == "Chitosan" | Treatment == "Mock") 
+  #prune_taxa(taxa_sums(.) > 10, .) %>%
+  #prune_samples(sample_sums(.) > 1000, .)
+physq_sub #90 samples, 323 taxa
+# Summary statistics on read counts 
+min(sample_sums(physq_sub)) #75
+mean(sample_sums(physq_sub)) #566
+max(sample_sums(physq_sub))  #2319
+
+# get read counts 
+sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "gray", binwidth = 50) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+physq_scale <- physq_sub %>%
+  scale_reads(n = 100, round = "round") 
+
+# Summary statistics on read counts 
+min(sample_sums(physq_scale)) #96
+mean(sample_sums(physq_scale)) #99
+max(sample_sums(physq_scale))  #102
+```
+### Ordinate
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=3, maxit=500, try=100,
+                     distance = "bray") #stress=0.1638471  
+physq_bc
+```
+
+### Plot
+```{r}
+ordplotC <- plot_ordination(physeq = physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #label = "Sample_labels"
+                            shape = "Trt_Tiss",
+                            color = "Timepoint") +
+  geom_point(size = 3) + 
+  # change colors and shapes
+  scale_color_manual(name = "Timepoint",
+                     breaks = c("Day 0", "Day 14", "Day 28", 
+                                "Day 42", "Rotten"), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(name = "Sample Type",
+                     breaks = c("Chitosan-Pulp", 
+                                "Chitosan-Skin",
+                                "Mock-Pulp", 
+                                "Mock-Skin"),
+                     values = c(1, 2, 
+                                16, 17))  
+ordplotC
+```
+
+### Tests
+```{r}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### ANOSIM
+
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoint*Trt_Tiss, data=sampledf)
+adonb #p= , R2=
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoint)
+permutest(beta) #0.003
+beta <- betadisper(dat_bray, sampledf$Trt_Tiss)
+permutest(beta) #0.082
+```
+
+# Export
+```{r}
+leg <- get_legend(ordplotJ)
+ordplotGJ <- plot_grid((ordplotG + theme(legend.position = "none")), 
+                       (ordplotJ + theme(legend.position = "none")), 
+                       leg, nrow = 1, ncol = 3,
+                       rel_widths = c(2, 2, 0.75))
+
+# save_plot(plot = ordplotGJ, 
+#           base_height = 5, base_width = 13,
+#           filename = "Figures/NMDS_BothCultivars_untreated.pdf")
+
+save_plot(plot = ordplotG, 
+          base_height = 5, base_width = 6,
+          filename = "Figures/NMDS_Gala_untreated.pdf")
+
+save_plot(plot = ordplotJ, 
+          base_height = 5, base_width = 6,
+          filename = "Figures/NMDS_Jonathan_untreated.pdf")
+
+save_plot(plot = ordplotC, 
+          base_height = 5, base_width = 6,
+          filename = "Figures/NMDS_Chitosan.pdf")
+```
+
+
+-----
+end 

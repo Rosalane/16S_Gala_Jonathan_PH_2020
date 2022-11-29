@@ -1,0 +1,2291 @@
+---
+title: "16S.Gala.PH.2021"
+Author: "Rose.KV."
+output: html_notebook
+---
+#Libraries needed
+```{r}
+library("phyloseq")
+library("ggplot2")
+library("ape")
+library("gridExtra")
+library("ggpubr")
+library("ggsignif")
+library(forcats)
+library(vegan)
+library(cowplot)
+library(tidyverse)
+theme_set(theme_cowplot())
+set.seed(7)
+source("C:/users/kithanro/Documents/16s_Gala_postharvest_2021/DenefLab-MicrobeMiseq/R/miseqR.R")
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/kithanro/Documents/16s 2020 data")
+```
+
+
+#Phyloseq object
+```{r echo=TRUE}
+#read in otu table
+#read in otu table
+otu_table <- read.table("OTU_table.txt",
+                        sep="\t",row.names = 1,header = TRUE) %>%
+  as.matrix(otu_table,rownames=TRUE)
+
+#read in taxonomy
+taxonomy <- read_delim("taxonomy.csv", delim = ",", col_names = TRUE) %>% 
+  column_to_rownames(var = "OTU_ID") %>%
+  as.matrix()
+
+#read in metadata
+metadata=read.table("Sample_metadata.2020.csv", sep = ",", header = TRUE,
+                    row.names=1, na.strings = "") 
+metadata
+phy_tree = read_tree("tree.nwk")
+
+#import as phyloseq objects
+OTU = otu_table(otu_table,taxa_are_rows=TRUE)
+TAX = tax_table(taxonomy)
+META = sample_data(metadata)
+#Physeq object
+physeq <- phyloseq(OTU,TAX,META,phy_tree) #454 taxa and 361 samples 
+
+test_df1 <- as.data.frame(sample_sums(physeq)) %>% #sum reads per sample
+  rownames_to_column(var = "Sample_ID") #format for plot
+
+# make the plot
+test_plot <- ggplot(test_df1, aes(x = reorder(Sample_ID, -`sample_sums(physeq)`), #orders axis
+                                 y = `sample_sums(physeq)`
+                                 )) + 
+  geom_col() + ylab("Reads per sample") + xlab("Sample_ID") + #clean up labels
+  theme(axis.text.x = element_text(angle = -90, hjust=0))
+test_plot
+
+#To store phyloseq object in our local computer
+#saveRDS(physeq_filtered2, file = "C:/Users/kithanro/Documents/16s 2020 data/physeq_filtered2.RDS") 
+
+#To restore back the phyloseq object from local computer to R
+
+#object name. eg. physeq_filtered2 <- readRDS(file = "C:/Users/kithanro/Documents/16s_Gala_postharvest_2021/physeq_filtered2.RDS")
+```
+
+#Fitering Chloroplast and Mitocondria OTUs
+```{r}
+`%notin%` <- Negate(`%in%`)
+# #Filtering samples *maybe only works on data frames
+# physeq_filtered <- subset_taxa(physeq, Order %notin% "Chloroplast", 
+#                                Family %notin% "Mitochondria")
+
+#physeq <- physeq_filtered
+physeq_filtered <- physeq %>% 
+  
+  subset_taxa(Order != " Chloroplast") %>%
+  subset_taxa(Family != " Mitochondria")
+   #313 taxa and 361 samples 
+
+#check reads per sample
+test_df <- as.data.frame(sample_sums(physeq_filtered)) %>% #sum reads per sample
+  rownames_to_column(var = "Sample_ID") #format for plot
+
+# make the plot
+test_plot <- ggplot(test_df, aes(x = reorder(Sample_ID, -`sample_sums(physeq_filtered)`), #orders axis
+                                 y = `sample_sums(physeq_filtered)`
+                                 )) + 
+  geom_col() + ylab("Reads per sample") + xlab("Sample_ID") + #clean up labels
+  theme(axis.text.x = element_text(angle = -90, hjust=0))
+test_plot
+
+# more filtering to remove samples that didn't sequence well or OTUs that may not be real 
+  physeq_filtered2 <- physeq_filtered %>%
+  prune_samples(sample_sums(.) >= 99, .) #remove samples with <=99 reads per samples
+  #313 taxa and 280 samples
+  
+  #check reads per sample
+test_df2 <- as.data.frame(sample_sums(physeq_filtered2)) %>% #sum reads per sample
+  rownames_to_column(var = "Sample_ID") #format for plot
+  
+# prune_taxa(taxa_sums(.) >= 2, .) # remove taxa with <=2 reads per OTU
+  
+# subset samples to each read numbers 
+  
+#extrct sample df from phylose object
+test_samp <- sample_data(physeq_filtered2)
+```
+
+
+
+#Beta diversity_analysis between Gala and Jonathan in pulp
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Tissue.types != "Skin")
+physq_sub #313 taxa and 99 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #stress= 0.220152 
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Treatments",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  #scale_shape_manual(aes(size = 6),
+                     # name = "Treatments",
+                     # breaks = c("Control", "ASM-treated"),
+                     # values = c(16, 17)) +  
+  ggtitle("Pulp: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb 
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.001
+Cul_ano$statistic #R=0.211946
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+
+#Beta diversity_analysis between Gala and Jonathan in pulp (Timepoint 28)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 14") %>%
+  subset_samples(Timepoints != "Day 42") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Rotten") %>%
+  subset_samples(Tissue.types != "Skin")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #stress= 0.1293386  
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Pulp: Day 28: Gala VS. Jonathan")
+ordplotG
+```
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb 
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.001
+Cul_ano$statistic  #R=0.9442751
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+
+#Beta diversity_analysis between Gala and Jonathan in pulp (Timepoint 42)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 14") %>%
+  subset_samples(Timepoints != "Day 28") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Rotten") %>%
+  subset_samples(Tissue.types != "Skin")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #stress= 0.1782623 
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Pulp: Day 42: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb 
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.001
+Cul_ano$statistic #R=0.9896259
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis between Gala and Jonathan in pulp (Timepoint Rotten)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 14") %>%
+  subset_samples(Timepoints != "Day 28") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Day 42") %>%
+  subset_samples(Tissue.types != "Skin")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #stress= 0.220152 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Pulp: Rotten: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb 
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #0.263
+Cul_ano$statistic #R=0.06153846
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+
+#Beta diversity_analysis between Gala and Jonathan in pulp in different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Tissue.types != "Skin")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress:     0.2187513 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            label = "Replicates",
+                            type = "samples", 
+                            shape = "Cultivar",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"),
+                     values = c(16, 17)) +
+  ggtitle("Pulp: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints*Cultivar, data=sampledf)
+adonb #p= 0.001 (time); 0.001 (cultivar); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #0.001
+Cul_ano$statistic #R=0.211946
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.2798108
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+
+#Beta diversity_analysis Pulp vs. skin in Jonathan in pulp at different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Cultivar != "Gala") 
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress:     0.234104 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            shape = "Tissue.types",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  # scale_color_manual(name = "Tissue.types",
+  #                    breaks = c("Skin", "Pulp"), 
+  #                    values = c("#ED1E24", "#9ACA3C")) +
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14",
+                                "Day 28", "Day 42", "Rotten" ),
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Tissue.types",
+                     breaks = c("Skin", "Pulp"),
+                     values = c(16, 17)) +
+  ggtitle("Jonathan: Skin Vs. Pulp")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints*Tissue.types, data=sampledf)
+adonb #p= 0.001 (time); 0.001 (cultivar); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Tissue.types)
+permutest(beta) #NS
+
+### ANOSIM
+Tiss <- get_variable(physq_scale, "Tissue.types")
+Tiss_ano <- anosim(dat_bray, Tiss)
+Tiss_ano$signif #p=0.013
+Tiss_ano$statistic #R=0.03693476
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001 
+time_ano$statistic #R=0.5884244
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis Pulp vs. skin in Gala in pulp at different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Cultivar != "Jonathan") 
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress:   0.1571081 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            shape = "Tissue.types",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Tissue.types",
+                     breaks = c("Skin", "Pulp"),
+                     values = c(16, 17)) +
+  ggtitle("Gala: Skin Vs. Pulp")
+ordplotG
+```
+
+# Tests
+
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints*Tissue.types, data=sampledf)
+adonb #p= 0.001 (time); 0.001 (cultivar); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Tissue.types)
+permutest(beta) #NS
+
+### ANOSIM
+Tiss <- get_variable(physq_scale, "Tissue.types")
+Tiss_ano <- anosim(dat_bray, Tiss)
+Tiss_ano$signif #p=0.001
+Tiss_ano$statistic #R=0.1712817
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001 
+time_ano$statistic #R=0.8311457
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+
+
+#Beta diversity_analysis between Gala and Jonathan in Skin in different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress: 0.2385102 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            shape = "Cultivar",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"),
+                     values = c(16, 17)) +
+  ggtitle("Skin: Gala VS. Jonathan")
+ordplotG
+```
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints*Cultivar, data=sampledf)
+adonb #p= 0.001 (time); 0.001 (cultivar); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #0.001
+Cul_ano$statistic #R=0.37169
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.1936663
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis between Gala and Jonathan in Skin (Timepoint 14)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 42") %>%
+  subset_samples(Timepoints != "Day 28") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Rotten") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #stress= 0.157594 
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Skin: Day 14: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb #p= 0.001, R=0.42144
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.001
+Cul_ano$statistic #R=0.9051594
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis between Gala and Jonathan in Skin (Timepoint 28)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 42") %>%
+  subset_samples(Timepoints != "Day 14") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Rotten") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress:     0.1711516  
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Skin: Day 28: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb #p= 0.001, R=0.49878
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.001
+Cul_ano$statistic #R=0.9013362
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis between Gala and Jonathan in Skin (Timepoint 42)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 28") %>%
+  subset_samples(Timepoints != "Day 14") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Rotten") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress:  0.1750279 
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Skin: Day 42: Gala VS. Jonathan")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb #p= 0.001, R=0.0.4639
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.001
+Cul_ano$statistic #R=0.7822025
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis between Gala and Jonathan in Skin (Timepoint Rotten)
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Timepoints != "Day 28") %>%
+  subset_samples(Timepoints != "Day 14") %>%
+  subset_samples(Timepoints != "Day 0") %>%
+  subset_samples(Timepoints != "Day 42") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress:  0.145649 
+physq_bc
+```
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Cultivar") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Cultivar",
+                     breaks = c("Gala", "Jonathan"), 
+                     values = c("#ED1E24", "#9ACA3C")) +
+  # scale_shape_manual(aes(size = 6),
+  #                    name = "Cultivar",
+  #                    breaks = c("Gala", "Jonathan"),
+  #                    values = c(16, 17)) +  
+  ggtitle("Skin: Rotten: Gala VS. Jonathan")
+ordplotG
+```
+
+
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Cultivar, data=sampledf)
+adonb #p= 0.977, R=0.06379
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Cul <- get_variable(physq_scale, "Cultivar")
+Cul_ano <- anosim(dat_bray, Cul)
+Cul_ano$signif #p=0.813
+Cul_ano$statistic #R=-0.1538462
+# Tmpt <- get_variable(physq_scale, "Timepoints")
+# time_ano <- anosim(dat_bray, Tmpt)
+# time_ano$signif #p=0.001
+# time_ano$statistic #R=0.2543025
+
+
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.036
+trm_ano$statistic #R=0.04220062
+```
+
+
+#Beta diversity_analysis Jonathan: Skin in different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Cultivar != "Gala") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress: 0.2528497 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  #scale_shape_manual(aes(size = 6),
+                     # name = "Cultivar",
+                     # breaks = c("Gala", "Jonathan"),
+                     # values = c(16, 17)) +
+  ggtitle("Jonathan: Skin at different timepoints")
+ordplotG
+```
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints, data=sampledf)
+adonb #p= 0.001 , R=0.44558
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+# Cul <- get_variable(physq_scale, "Cultivar")
+# Cul_ano <- anosim(dat_bray, Cul)
+# Cul_ano$signif #p=0.813
+# Cul_ano$statistic #R=-0.1538462
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.4173284
+
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis Jonathan: Pulp at different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Cultivar != "Gala")%>%
+  subset_samples(Tissue.types != "Skin")%>%
+subset_samples(Tissue.types != "Rotten")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress: 0.2346549 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  #scale_shape_manual(aes(size = 6),
+                     # name = "Cultivar",
+                     # breaks = c("Gala", "Jonathan"),
+                     # values = c(16, 17)) +
+  ggtitle("Jonathan: Pulp at different timepoints")
+ordplotG
+```
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints, data=sampledf)
+adonb #p= 0.001 , R=0.83668 
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+# Cul <- get_variable(physq_scale, "Cultivar")
+# Cul_ano <- anosim(dat_bray, Cul)
+# Cul_ano$signif #p=0.813
+# Cul_ano$statistic #R=-0.1538462
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.8271839
+
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis Gala: Skin at different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Cultivar != "Jonathan") %>%
+  subset_samples(Tissue.types != "Pulp")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress: 0.2058688 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  #scale_shape_manual(aes(size = 6),
+                     # name = "Cultivar",
+                     # breaks = c("Gala", "Jonathan"),
+                     # values = c(16, 17)) +
+  ggtitle("Gala: Skin at different timepoints")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints, data=sampledf)
+adonb #p= 0.001 , R=0.51707
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+# Cul <- get_variable(physq_scale, "Cultivar")
+# Cul_ano <- anosim(dat_bray, Cul)
+# Cul_ano$signif #p=0.813
+# Cul_ano$statistic #R=-0.1538462
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.8027433
+
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+#Beta diversity_analysis Gala: Skin at different timepoints
+
+```{r}
+# create a subset of the phyloseq object
+physq_sub <- physeq_filtered2 %>% 
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatment != "Chitosan") %>%
+  subset_samples(Treatment != "Mock") %>%
+  subset_samples(Treatment != "Chitosanitosan") %>%
+  subset_samples(Treatment != "Phage") %>%
+  subset_samples(Cultivar != "Mac") %>%
+  subset_samples(Cultivar != "Jonathan") %>%
+  subset_samples(Tissue.types != "Skin")
+physq_sub #313 taxa and 40 samples
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) # 99
+ mean(sample_sums(physq_sub)) # 528
+ max(sample_sums(physq_sub))  #4204
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+ ggplot(sample_sum_df, aes(x = sum)) + 
+   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+   ggtitle("Distribution of sample sequencing depth") + 
+   xlab("Read counts") +
+   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_scale)) # 96
+ mean(sample_sums(physq_scale)) #  98
+ max(sample_sums(physq_scale))  # 102
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #Stress: 0.1617502 
+physq_bc
+```
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            #shape = "Cultivar",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+   #change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 14", 
+                                "Day 28", "Day 42", "Rotten" ), 
+                     values = c("#ED1E24", "#9ACA3C", "#40B9EB",
+                                "#426FB6", "#D771AD")) +
+  #scale_shape_manual(aes(size = 6),
+                     # name = "Cultivar",
+                     # breaks = c("Gala", "Jonathan"),
+                     # values = c(16, 17)) +
+  ggtitle("Gala: Pulp at different timepoints")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints, data=sampledf)
+adonb #p= 0.001 , R=0.83523
+# adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+# adonb #p= 0.001 (time); 0.011 (trtmnt); 0.001 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+# Cul <- get_variable(physq_scale, "Cultivar")
+# Cul_ano <- anosim(dat_bray, Cul)
+# Cul_ano$signif #p=0.813
+# Cul_ano$statistic #R=-0.1538462
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.9140997
+
+
+# Trtmt <- get_variable(physq_scale, "Treatments")
+# trm_ano <- anosim(dat_bray, Trtmt)
+# trm_ano$signif #p=0.036
+# trm_ano$statistic #R=0.04220062
+```
+
+
+
+#beta diversity: between timepoints and treatments in skin
+
+
+```{r}
+# pseq <- remove_samples(c("S6T6.0"), physeq_filtered2) %>% # create a subset of the phyloseq object
+#   
+# physq_sub = subset_samples(physeq_filtered2, Sample_ID != "S6T6.0")%>%
+#   
+# physq_sub = subset_samples(., sample_names(.) != "S6T6.0")%>%
+  
+physq_sub <- physeq_filtered2 %>% # create a subset of the phyloseq object
+  subset_taxa(Family != " Mitochondria")%>%
+  subset_taxa(Order != " Chloroplast")%>%
+  subset_samples(Treatments != "None") %>%
+  subset_samples(Tissue_types != "Pulp") %>%
+  subset_samples(Timepoints != "Day 14")%>%
+  subset_samples(Sample_ID != "S6T6.0")
+physq_sub #1342 taxa and 38 samples
+
+
+# test_psq <-  physq_filtered %>%
+#   subset_samples(Timepoints == "Day 0" & Tissue_types == "Skin" & 
+#                    Treatments == "Control" & Replicate != 6) 
+
+# Summary statistics on read counts 
+ min(sample_sums(physq_sub)) #1214
+ mean(sample_sums(physq_sub)) #6288.026
+ max(sample_sums(physq_sub))  #13603
+
+# get read counts 
+ sample_sum_df <- data.frame(sum = sample_sums(physq_sub))
+
+# Histogram of sample read counts
+# ggplot(sample_sum_df, aes(x = sum)) + 
+#   geom_histogram(color = "black", fill = "gray", binwidth = 100) +
+#   ggtitle("Distribution of sample sequencing depth") + 
+#   xlab("Read counts") +
+#   theme(axis.title.y = element_blank())
+
+# scale samples to even depth using custom function
+ physq_scale <- physq_sub %>%
+ scale_reads(round = "round") 
+
+# Summary statistics on read counts 
+min(sample_sums(physq_scale)) #1208
+mean(sample_sums(physq_scale)) #1213.921
+max(sample_sums(physq_scale))  #1220
+```
+
+### Ordinate
+Conduct ordination analysis
+```{r, results='hide'}
+physq_bc <- ordinate(physq_scale, 
+                     method = "NMDS", 
+                     k=2, maxit=100, try=100,
+                     distance = "bray") #stress= 0.2258204 
+physq_bc
+```
+
+
+
+### Plot
+Generate the plot
+```{r}
+ordplotG <- plot_ordination(physq_scale, 
+                            ordination = physq_bc, 
+                            type = "samples", 
+                            # label = "Replicate",
+                            shape = "Treatments",
+                            color = "Timepoints") +
+  geom_point(size = 3) +
+  # change colors and shapes
+  scale_color_manual(name = "Timepoints",
+                     breaks = c("Day 0", "Day 7", 
+                                "Day 25", "Day 49"), 
+                     values = c("#ED1E24", "#9ACA3C", 
+                                "#426FB6", "#D771AD")) +
+  scale_shape_manual(aes(size = 6),
+                     name = "Treatments",
+                     breaks = c("Control", "ASM-treated"),
+                     values = c(16, 17)) +  
+  ggtitle("Skin: Control Vs. ASM-treated")
+ordplotG
+```
+
+### Tests
+Extra values and do statistical analysis 
+```{r eval=FALSE, include=FALSE}
+# Calculate bray curtis distance matrix
+dat_bray <- phyloseq::distance(physq_scale, method = "bray") 
+# make a data frame from the sample_data
+sampledf <- data.frame(sample_data(physq_scale))
+### Adonis test 
+adonb <- adonis(dat_bray~Timepoints*Treatments, data=sampledf)
+adonb #p= 0.001 (time); 0.053 (tissue); 0.002 (both)
+
+### Homogeneity of dispersion test 
+beta <- betadisper(dat_bray, sampledf$Timepoints)
+permutest(beta) #NS
+beta <- betadisper(dat_bray, sampledf$Treatments)
+permutest(beta) #NS
+
+### ANOSIM
+Tmpt <- get_variable(physq_scale, "Timepoints")
+time_ano <- anosim(dat_bray, Tmpt)
+time_ano$signif #p=0.001
+time_ano$statistic #R=0.583139
+Trtmt <- get_variable(physq_scale, "Treatments")
+trm_ano <- anosim(dat_bray, Trtmt)
+trm_ano$signif #p=0.058
+trm_ano$statistic #R=0.05960
+```
+
+
+
+#Beta Diversity by treatments
+
+##Weighted Unifrac stats 
+Analyzed by Timepoints
+```{r}
+## PERMANOVA
+library(vegan)
+physeq_filtered3 <- physeq_filtered2 %>%
+  subset_samples(Treatments != "None") 
+
+wuinfrac_dist <- phyloseq::distance(physeq_filtered3, method="wunifrac") #RUN this only once because it takes a lot of time
+
+adonis_wunifrac = adonis2(wuinfrac_dist ~ sample_data(physeq_filtered3)$Treatments)
+adonis_wunifrac
+
+
+## Significant PERMANOVA indicates that centroid (or spatial median) among groups is different and/or with-group dispersion among groups is different
+## PERMDISP
+
+# subset phyloseq object as for sample data
+wuni_disp <-betadisper(wuinfrac_dist, sample_data(physeq_filtered3)$Treatments, type=c("median"))
+anova(wuni_disp)
+ 
+## If PERMANOVA and PERMDISP are both significant, you can use plotting to tell if PERMANOVA was significant based on centroid (or spatial median)
+plot(wuni_disp)
+
+#?plot.betadisper
+## Would look better with higher replication for groups
+plot(wuni_disp, label = F)
+
+## Plot with 1 standard deviation ellipses around the group medians
+## sample size issue here, but you get the idea
+plot(wuni_disp, label = F, hull = F, ellipse = T)
+
+## Within-group dispersion that PERMDISP is testing
+boxplot(wuni_disp, las = 2, cex.lab=1.5)
+?boxplot
+
+## pairwise p-values
+TukeyHSD(wuni_disp)
+scores(wuni_disp, 1:4, display = "centroids")
+rda(otu_table)
+```
+
+##Weighted unifrac beta diversity plot with phyloseq
+Used to check the PCoA %
+```{r}
+beta_wu <- ordinate(physeq_filtered3, "PCoA", "wunifrac")
+beta_wu_plot = plot_ordination(physeq_filtered3, beta_wu, type="Treatments", color="Treatments", shape="Treatments", title="PCoA Weighted Unifrac") + stat_ellipse(type = "t", linetype = 3) + stat_ellipse(type = "t") + theme_bw()+labs(colour = "Treatments") #To add arrows https://neavemj.github.io/posts/coralMicrobiome
+beta_wu_plot
+```
+
+#Final weighted unifrac plot
+```{r}
+label_perm <- expression(paste("PERMANOVA, ",R^2 ,"= 0.16, ", paste(italic('p')),"=0.001"))
+beta_scatter = as.data.frame(beta_wu[["vectors"]])
+beta_meta = merge(beta_scatter,metadata,by = 0,all=F)
+pmain_wuF = ggscatter(beta_meta, x = "Axis.1", y = "Axis.2", color = "Treatments", palette = "aaas",ellipse = TRUE, ellipse.level=.5,mean.point = F, mean.point.size = 5, star.plot = F) +labs(x = "PCoA 1 (40.2%) ", y = "PCoA 2 (19.3%)", colour = "Treatments", fill = "Treatments") +annotate("text", x = -0.04, y = -0.06, label = label_perm, colour = "black")
+pmain_wuF
+```
+
+#Beta Diversity by time points
+
+##Weighted Unifrac stats 
+Analyzed by Timepoints
+```{r}
+## PERMANOVA
+library(vegan)
+wuinfrac_dist = phyloseq::distance(physeq_filtered.cs, method="wunifrac")
+#RUN this only once because it takes a lot of time
+
+adonis_wunifrac = adonis2(wuinfrac_dist ~ sample_data(physeq_filtered.cs)$Timepoints)
+adonis_wunifrac
+
+
+## Significant PERMANOVA indicates that centroid (or spatial median) among groups is different and/or with-group dispersion among groups is different
+## PERMDISP
+
+# subset phyloseq object as for sample data
+wuni_disp <-betadisper(wuinfrac_dist, sample_data(physeq_filtered.cs)$Timepoints, type=c("median"))
+anova(wuni_disp)
+ 
+## If PERMANOVA and PERMDISP are both significant, you can use plotting to tell if PERMANOVA was significant based on centroid (or spatial median)
+plot(wuni_disp)
+
+#?plot.betadisper
+## Would look better with higher replication for groups
+plot(wuni_disp, label = F)
+
+## Plot with 1 standard deviation ellipses around the group medians
+## sample size issue here, but you get the idea
+plot(wuni_disp, label = F, hull = F, ellipse = T)
+
+## Within-group dispersion that PERMDISP is testing
+boxplot(wuni_disp, las = 2, cex.lab=1.5)
+?boxplot
+
+## pairwise p-values
+TukeyHSD(wuni_disp)
+scores(wuni_disp, 1:4, display = "centroids")
+rda(otu_table)
+```
+
+
+##Weighted unifrac beta diversity plot with phyloseq
+Used to check the PCoA %
+```{r}
+beta_wu <- ordinate(physeq_filtered2, "PCoA", "wunifrac")
+beta_wu_plot = plot_ordination(physeq_filtered2, beta_wu, type="Timepoints", color="Timepoints", shape="Timepoints", title="PCoA Weighted Unifrac") + stat_ellipse(type = "t", linetype = 3) + stat_ellipse(type = "t") + theme_bw()+labs(colour = "Timepoints") #To add arrows https://neavemj.github.io/posts/coralMicrobiome
+beta_wu_plot
+```
+
+#Final weighted unifrac plot
+```{r}
+label_perm <- expression(paste("PERMANOVA, ",R^2 ,"= 0.16, ", paste(italic('p')),"=0.001"))
+beta_scatter = as.data.frame(beta_wu[["vectors"]])
+beta_meta = merge(beta_scatter,metadata,by = 0,all=F)
+pmain_wuF = ggscatter(beta_meta, x = "Axis.1", y = "Axis.2", color = "Timepoints", palette = "aaas",ellipse = TRUE, ellipse.level=.5,mean.point = F, mean.point.size = 5, star.plot = F) +labs(x = "PCoA 1 (40.2%) ", y = "PCoA 2 (19.3%)", colour = "Timepoints", fill = "Timepoints") +annotate("text", x = -0.04, y = -0.06, label = label_perm, colour = "black")
+pmain_wuF
+```
+
+
+
+
+#Beta Diversity by tissue_types
+
+##Weighted Unifrac stats 
+Analyzed by Timepoints
+```{r}
+## PERMANOVA
+library(vegan)
+
+physeq_filtered3 <- physeq_filtered2 %>%
+  subset_samples(Treatments != "None") %>%
+  subset_samples(Treatments != "Control") 
+
+wuinfrac_dist = phyloseq::distance(physeq_filtered3, method="wunifrac") #RUN this only once because it takes a lot of time
+
+adonis_wunifrac = adonis2(wuinfrac_dist ~ sample_data(physeq_filtered3)$Tissue_types)
+adonis_wunifrac
+
+
+## Significant PERMANOVA indicates that centroid (or spatial median) among groups is different and/or with-group dispersion among groups is different
+## PERMDISP
+
+# subset phyloseq object as for sample data
+wuni_disp <-betadisper(wuinfrac_dist, sample_data(physeq_filtered3)$Tissue_types, type=c("median"))
+anova(wuni_disp)
+ 
+## If PERMANOVA and PERMDISP are both significant, you can use plotting to tell if PERMANOVA was significant based on centroid (or spatial median)
+plot(wuni_disp)
+
+#?plot.betadisper
+## Would look better with higher replication for groups
+plot(wuni_disp, label = F)
+
+## Plot with 1 standard deviation ellipses around the group medians
+## sample size issue here, but you get the idea
+plot(wuni_disp, label = F, hull = F, ellipse = T)
+
+## Within-group dispersion that PERMDISP is testing
+boxplot(wuni_disp, las = 2, cex.lab=1.5)
+?boxplot
+
+## pairwise p-values
+TukeyHSD(wuni_disp)
+scores(wuni_disp, 1:4, display = "centroids")
+rda(otu_table)
+```
+
+##Weighted unifrac beta diversity plot with phyloseq
+Used to check the PCoA %
+```{r}
+beta_wu <- ordinate(physeq_filtered3, "PCoA", "wunifrac")
+beta_wu_plot = plot_ordination(physeq_filtered2, beta_wu, type="Tissue_types", color="Tissue_types", shape="Tissue_types", title="PCoA Weighted Unifrac") + stat_ellipse(type = "t", linetype = 3) + stat_ellipse(type = "t") + theme_bw()+labs(colour = "Tissue_types") #To add arrows https://neavemj.github.io/posts/coralMicrobiome
+beta_wu_plot
+```
+
+#Final weighted unifrac plot
+```{r}
+label_perm <- expression(paste("PERMANOVA, ",R^2 ,"= 0.16, ", paste(italic('p')),"=0.001"))
+beta_scatter = as.data.frame(beta_wu[["vectors"]])
+beta_meta = merge(beta_scatter,metadata,by = 0,all=F)
+pmain_wuF = ggscatter(beta_meta, x = "Axis.1", y = "Axis.2", 
+                      color = "Tissue_types", palette = "aaas",
+                      ellipse = TRUE, ellipse.level=.5,
+                      mean.point = F, mean.point.size = 5, 
+                      star.plot = F) +
+  labs(x = "PCoA 1 (40.2%) ", y = "PCoA 2 (19.3%)", 
+       colour = "Tissue_types", fill = "Tissue_types") +
+  annotate("text", x = -0.04, y = -0.06, label = label_perm, colour = "black")
+pmain_wuF
+```
+
+##Bray-Curtis dissimilarity statistics
+```{r}
+## PERMANOVA
+library(vegan)
+bray_dist = phyloseq::distance(physeq_filtered2, method="bray") #RUN this only once because it takes a lot of time
+adonis_bray = adonis2(bray_dist ~ sample_data(physeq_filtered2)$Timepoints)
+adonis_bray
+## Significant PERMANOVA indicates that centroid (or spatial median) among groups is different and/or with-group dispersion among groups is different
+## PERMDISP
+bray_disp <-betadisper(wuinfrac_dist, sample_data(physeq_filtered2)$Timepoints, type=c("median"))
+anova(bray_disp)
+## If PERMANOVA and PERMDISP are both significant, you can use plotting to tell if PERMANOVA was significant based on centroid (or spatial median)
+plot(bray_disp)
+#?plot.betadisper
+## Would look better with higher replication for groups
+plot(bray_disp, label = F)
+## Plot with 1 standard deviation ellipses around the group medians
+## sample size issue here, but you get the idea
+plot(bray_disp, label = F, hull = F, ellipse = T)
+## Within-group dispersion that PERMDISP is testing
+boxplot(bray_disp, las = 2, cex.lab=1.5)
+?boxplot
+## pairwise p-values
+TukeyHSD(bray_disp)
+scores(bray_disp, 1:4, display = "centroids")
+```
+
+##Bray beta diversity plot
+```{r}
+beta_bray <- ordinate(physeq_filtered2, "PCoA", "bray") #RUN this only ONCE because it takes a lot of time
+beta_bray_plot = plot_ordination(physeq_filtered2, beta_bray, type="Timepoints", color="Timepoints", shape="Timepoints", title="PCoA Weighted Unifrac") + stat_ellipse(type = "t", linetype = 3) + stat_ellipse(type = "t") + theme_bw()+labs(colour = "Timepoints") #To add arrows https://neavemj.github.io/posts/coralMicrobiome
+beta_bray_plot
+```
+
+##Bray-Curtis final plot
+```{r}
+label_perm <- expression(paste("PERMANOVA, ",R^2 ,"= 0.12, ", paste(italic('p')),"=0.001"))
+#library(lemon)
+beta_scatter = as.data.frame(beta_bray[["vectors"]])
+beta_meta = merge(beta_scatter,metadata,by = 0,all=F)
+pmain_brayF = ggscatter(beta_meta, x = "Axis.1", y = "Axis.2", color = "Timepoints", palette = "aaas",ellipse = TRUE, ellipse.level=.5,mean.point = F, mean.point.size = 5, star.plot = F) +labs(x = "PCoA 1 (24.1%) ", y = "PCoA 2 (20.6%)", colour = "Timepoints", fill = "Timepoints")+ annotate("text", x = -0.12, y = -0.2, label = label_perm, colour = "black")
+pmain_brayF
+```
+
+##Bray-Curtis dissimilarity statistics
+```{r}
+## PERMANOVA
+library(vegan)
+bray_dist = phyloseq::distance(physeq_filtered2, method="bray") #RUN this only once because it takes a lot of time
+adonis_bray = adonis2(bray_dist ~ sample_data(physeq_filtered2)$Tissue_types)
+adonis_bray
+## Significant PERMANOVA indicates that centroid (or spatial median) among groups is different and/or with-group dispersion among groups is different
+## PERMDISP
+bray_disp <-betadisper(wuinfrac_dist, sample_data(physeq_filtered2)$Tissue_types, type=c("median"))
+anova(bray_disp)
+## If PERMANOVA and PERMDISP are both significant, you can use plotting to tell if PERMANOVA was significant based on centroid (or spatial median)
+plot(bray_disp)
+#?plot.betadisper
+## Would look better with higher replication for groups
+plot(bray_disp, label = F)
+## Plot with 1 standard deviation ellipses around the group medians
+## sample size issue here, but you get the idea
+plot(bray_disp, label = F, hull = F, ellipse = T)
+## Within-group dispersion that PERMDISP is testing
+boxplot(bray_disp, las = 2, cex.lab=1.5)
+?boxplot
+## pairwise p-values
+TukeyHSD(bray_disp)
+scores(bray_disp, 1:4, display = "centroids")
+```
+
+##Bray beta diversity plot
+```{r}
+beta_bray <- ordinate(physeq_filtered2, "PCoA", "bray") #RUN this only ONCE because it takes a lot of time
+beta_bray_plot = plot_ordination(physeq_filtered2, beta_bray, type="Tissue_types", color="Tissue_types", shape="Tissue_types", title="PCoA Weighted Unifrac") + stat_ellipse(type = "t", linetype = 3) + stat_ellipse(type = "t") + theme_bw()+labs(colour = "Tissue_types") #To add arrows https://neavemj.github.io/posts/coralMicrobiome
+beta_bray_plot
+```
+
+
+##Bray-Curtis final plot
+```{r}
+label_perm <- expression(paste("PERMANOVA, ",R^2 ,"= 0.12, ", paste(italic('p')),"=0.001"))
+#library(lemon)
+beta_scatter = as.data.frame(beta_bray[["vectors"]])
+beta_meta = merge(beta_scatter,metadata,by = 0,all=F)
+pmain_brayF = ggscatter(beta_meta, x = "Axis.1", y = "Axis.2", color = "Tissue_types", palette = "aaas",ellipse = TRUE, ellipse.level=.5,mean.point = F, mean.point.size = 5, star.plot = F) +labs(x = "PCoA 1 (24.1%) ", y = "PCoA 2 (20.6%)", colour = "Tissue_types", fill = "Tissue_types")+ annotate("text", x = -0.12, y = -0.2, label = label_perm, colour = "black")
+pmain_brayF
+```
+
+##Arranging both diversity plots into one
+```{r}
+beta_div_plots = ggarrange(pmain_brayF,pmain_wuF,nrow = 2, ncol = 1, align="hv", common.legend = TRUE, labels = c("C","D")) 
+beta_div_plots
+```
